@@ -1,0 +1,61 @@
+name: Property Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "Choose step"
+        required: true
+        default: "step1"
+        type: choice
+        options:
+          - step1
+          - step2
+
+      states:
+        description: "Comma separated states (NSW,QLD,etc)"
+        required: false
+        default: "NSW"
+
+      max_properties:
+        description: "Max properties to scrape (for testing)"
+        required: false
+        default: "10"
+
+      input_file:
+        description: "CSV file for step2"
+        required: false
+        default: "properties.csv"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Step 1
+        if: ${{ github.event.inputs.step == 'step1' }}
+        run: |
+          python scraper/step1_scrape.py "${{ github.event.inputs.states }}" "${{ github.event.inputs.max_properties }}"
+
+      - name: Run Step 2
+        if: ${{ github.event.inputs.step == 'step2' }}
+        run: |
+          python scraper/step2_status.py "${{ github.event.inputs.input_file }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: |
+            *.csv
