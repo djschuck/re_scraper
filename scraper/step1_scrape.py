@@ -42,40 +42,39 @@ def extract_property_data(url):
         "Date Published": None
     }
 
-    # Extract JSON-LD structured data
     for script in soup.find_all("script", type="application/ld+json"):
         if "address" in script.text:
-            text = script.text
-            
             import json
             try:
-                j = json.loads(text)
-                
+                j = json.loads(script.text)
                 if isinstance(j, dict) and "address" in j:
                     addr = j["address"]
                     data["Address"] = addr.get("streetAddress")
                     data["Suburb"] = addr.get("addressLocality")
                     data["Postcode"] = addr.get("postalCode")
                     data["State"] = addr.get("addressRegion")
-                    
             except:
                 pass
 
-    # Property ID from URL
     if "property-" in url:
         data["Property ID"] = url.split("-")[-1]
 
     return data
 
 
-def run(selected_states):
+def run(selected_states, max_properties):
     all_rows = []
+    count = 0
 
     for state in selected_states:
         print(f"Scraping {state}")
         page = 1
 
         while True:
+            if max_properties and count >= max_properties:
+                print(f"Reached limit of {max_properties} properties")
+                break
+
             url = STATE_URLS[state].format(page)
             res = get_html(url)
 
@@ -88,11 +87,19 @@ def run(selected_states):
                 break
 
             for link in links:
+                if max_properties and count >= max_properties:
+                    break
+
                 data = extract_property_data(link)
                 if data:
                     all_rows.append(data)
+                    count += 1
+                    print(f"Collected {count}")
 
             page += 1
+
+        if max_properties and count >= max_properties:
+            break
 
     df = pd.DataFrame(all_rows)
     df.to_csv("properties.csv", index=False)
@@ -101,5 +108,8 @@ def run(selected_states):
 
 if __name__ == "__main__":
     import sys
+
     states = sys.argv[1].split(",")
-    run(states)
+    max_props = int(sys.argv[2]) if len(sys.argv) > 2 else None
+
+    run(states, max_props)
