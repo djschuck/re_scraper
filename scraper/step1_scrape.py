@@ -1,105 +1,111 @@
+import os
+import json
 import pandas as pd
-from bs4 import BeautifulSoup
-from scraper.utils import get_html
+from playwright.sync_api import sync_playwright
 
 STATE_URLS = {
     "NSW": "https://www.realestate.com.au/buy/in-nsw/list-{}",
-    "WA": "https://www.realestate.com.au/buy/in-wa/list-{}",
-    "ACT": "https://www.realestate.com.au/buy/in-act/list-{}",
-    "VIC": "https://www.realestate.com.au/buy/in-vic/list-{}",
-    "SA": "https://www.realestate.com.au/buy/in-sa/list-{}",
-    "NT": "https://www.realestate.com.au/buy/in-nt/list-{}",
     "QLD": "https://www.realestate.com.au/buy/in-qld/list-{}",
-    "TAS": "https://www.realestate.com.au/buy/in-tas/list-{}"
 }
 
-def extract_property_links(html):
-    soup = BeautifulSoup(html, "lxml")
-    links = []
-    
-    for a in soup.select('a[href*="/property-"]'):
-        href = a.get("href")
-        if href and "realestate.com.au/property" in href:
-            links.append(href)
-    
-    return list(set(links))
+os.makedirs("debug", exist_ok=True)
 
 
-def extract_property_data(url):
-    response = get_html(url)
-    if not response or response.status_code != 200:
-        return None
-
-    soup = BeautifulSoup(response.text, "lxml")
-
-    data = {
-        "Address": None,
-        "Suburb": None,
-        "Postcode": None,
-        "State": None,
-        "Hyperlink": url,
-        "Property ID": None,
-        "Date Published": None
-    }
-
-    for script in soup.find_all("script", type="application/ld+json"):
-        if "address" in script.text:
-            import json
-            try:
-                j = json.loads(script.text)
-                if isinstance(j, dict) and "address" in j:
-                    addr = j["address"]
-                    data["Address"] = addr.get("streetAddress")
-                    data["Suburb"] = addr.get("addressLocality")
-                    data["Postcode"] = addr.get("postalCode")
-                    data["State"] = addr.get("addressRegion")
-            except:
-                pass
-
-    if "property-" in url:
-        data["Property ID"] = url.split("-")[-1]
-
-    return data
-
-
-def run(selected_states, max_properties):
+def run(states, max_properties):
     all_rows = []
-    count = 0
+    collected = 0
 
-    for state in selected_states:
-        print(f"Scraping {state}")
-        page = 1
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-        while True:
-            if max_properties and count >= max_properties:
-                print(f"Reached limit of {max_properties} properties")
-                break
+        for state in states:
+            page_num = 1
 
-            url = STATE_URLS[state].format(page)
-            res = get_html(url)
+            while collected < max_properties:
+                url = STATE_URLS[state].format(page_num)
+                print(f"Loading {url}")
 
-            if not res or res.status_code != 200:
-                break
+                page.goto(url, timeout=60000)
 
-            links = extract_property_links(res.text)
+                # wait for listings to render
+                page.wait_for_timeout(5000)
 
-            if not links:
-                break
+                # save debug HTML + screenshot
+                html = page.content()
+                with open(f"debug/list_{state}_{page_num}.html", "w", encoding="utf-8") as f:
+                    f.write(html)
 
-            for link in links:
-                if max_properties and count >= max_properties:
+                page.screenshot(path=f"debug/list_{state}_{page_num}.png")
+
+                # extract links
+                links = page.eval_on_selector_all(
+                    "a[href*='/property-']",
+                    "els => els.map(e => e.href)"
+                )
+
+                links = list(set(links))
+                print(f"Found {len(links)} links")
+
+                # save debug links
+                pd.DataFrame({"links": links}).to_csv(
+                    f"debug/links_{state}_{page_num}.csv", index=False
+                )
+
+                if not links:
                     break
 
-                data = extract_property_data(link)
-                if data:
-                    all_rows.append(data)
-                    count += 1
-                    print(f"Collected {count}")
+                for link in links:
+                    if collected >= max_properties:
+                        break
 
-            page += 1
+                    try:
+                        page.goto(link, timeout=60000)
+                        page.wait_for_timeout(3000)
 
-        if max_properties and count >= max_properties:
-            break
+                        # screenshot property page
+                        safe_id = link.split("-")[-1]
+                        page.screenshot(path=f"debug/property_{safe_id}.png")
+
+                        html = page.content()
+                        with open(f"debug/property_{safe_id}.html", "w", encoding="utf-8") as f:
+                            f.write(html)
+
+                        data = {
+                            "Address": None,
+                            "Suburb": None,
+                            "Postcode": None,
+                            "State": None,
+                            "Hyperlink": link,
+                            "Property ID": safe_id,
+                            "Date Published": None
+                        }
+
+                        # extract JSON-LD
+                        scripts = page.locator("script[type='application/ld+json']").all_text_contents()
+
+                        for s in scripts:
+                            try:
+                                j = json.loads(s)
+                                if isinstance(j, dict) and "address" in j:
+                                    addr = j["address"]
+                                    data["Address"] = addr.get("streetAddress")
+                                    data["Suburb"] = addr.get("addressLocality")
+                                    data["Postcode"] = addr.get("postalCode")
+                                    data["State"] = addr.get("addressRegion")
+                            except:
+                                pass
+
+                        all_rows.append(data)
+                        collected += 1
+                        print(f"Collected {collected}")
+
+                    except Exception as e:
+                        print(f"Error on property: {e}")
+
+                page_num += 1
+
+        browser.close()
 
     df = pd.DataFrame(all_rows)
     df.to_csv("properties.csv", index=False)
@@ -108,8 +114,6 @@ def run(selected_states, max_properties):
 
 if __name__ == "__main__":
     import sys
-
     states = sys.argv[1].split(",")
-    max_props = int(sys.argv[2]) if len(sys.argv) > 2 else None
-
+    max_props = int(sys.argv[2])
     run(states, max_props)
