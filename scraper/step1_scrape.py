@@ -5,7 +5,6 @@ from playwright.sync_api import sync_playwright
 
 STATE_URLS = {
     "NSW": "https://www.realestate.com.au/buy/in-nsw/list-{}",
-    "QLD": "https://www.realestate.com.au/buy/in-qld/list-{}",
 }
 
 os.makedirs("debug", exist_ok=True)
@@ -16,8 +15,17 @@ def run(states, max_properties):
     collected = 0
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        browser = p.chromium.launch(
+            headless=False,  # IMPORTANT
+            args=["--start-maximized"]
+        )
+
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
+        )
+
+        page = context.new_page()
 
         for state in states:
             page_num = 1
@@ -28,10 +36,14 @@ def run(states, max_properties):
 
                 page.goto(url, timeout=60000)
 
-                # wait for listings to render
-                page.wait_for_timeout(5000)
+                # simulate human wait
+                page.wait_for_timeout(8000)
 
-                # save debug HTML + screenshot
+                # scroll to trigger JS
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(3000)
+
+                # save debug
                 html = page.content()
                 with open(f"debug/list_{state}_{page_num}.html", "w", encoding="utf-8") as f:
                     f.write(html)
@@ -47,12 +59,12 @@ def run(states, max_properties):
                 links = list(set(links))
                 print(f"Found {len(links)} links")
 
-                # save debug links
                 pd.DataFrame({"links": links}).to_csv(
                     f"debug/links_{state}_{page_num}.csv", index=False
                 )
 
                 if not links:
+                    print("⚠️ Still blocked or selector wrong")
                     break
 
                 for link in links:
@@ -61,10 +73,10 @@ def run(states, max_properties):
 
                     try:
                         page.goto(link, timeout=60000)
-                        page.wait_for_timeout(3000)
+                        page.wait_for_timeout(5000)
 
-                        # screenshot property page
                         safe_id = link.split("-")[-1]
+
                         page.screenshot(path=f"debug/property_{safe_id}.png")
 
                         html = page.content()
@@ -78,10 +90,8 @@ def run(states, max_properties):
                             "State": None,
                             "Hyperlink": link,
                             "Property ID": safe_id,
-                            "Date Published": None
                         }
 
-                        # extract JSON-LD
                         scripts = page.locator("script[type='application/ld+json']").all_text_contents()
 
                         for s in scripts:
@@ -101,7 +111,7 @@ def run(states, max_properties):
                         print(f"Collected {collected}")
 
                     except Exception as e:
-                        print(f"Error on property: {e}")
+                        print(f"Error: {e}")
 
                 page_num += 1
 
