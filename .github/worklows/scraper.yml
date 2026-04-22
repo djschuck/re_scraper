@@ -17,6 +17,11 @@ on:
         required: false
         default: "NSW"
 
+      max_properties:
+        description: "Max properties to scrape (for testing)"
+        required: false
+        default: "10"
+
       input_file:
         description: "CSV file for step2"
         required: false
@@ -41,7 +46,7 @@ jobs:
       - name: Run Step 1
         if: ${{ github.event.inputs.step == 'step1' }}
         run: |
-          python scraper/step1_scrape.py "${{ github.event.inputs.states }}"
+          python scraper/step1_scrape.py "${{ github.event.inputs.states }}" "${{ github.event.inputs.max_properties }}"
 
       - name: Run Step 2
         if: ${{ github.event.inputs.step == 'step2' }}
