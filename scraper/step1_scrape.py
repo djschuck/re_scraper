@@ -16,16 +16,27 @@ def run(states, max_properties):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,  # IMPORTANT
-            args=["--start-maximized"]
+            headless=True,  # ✅ REQUIRED for GitHub Actions
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled"
+            ]
         )
 
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+            viewport={"width": 1280, "height": 800},
+            locale="en-AU"
         )
 
         page = context.new_page()
+
+        # Hide webdriver flag (basic stealth)
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            })
+        """)
 
         for state in states:
             page_num = 1
@@ -36,21 +47,19 @@ def run(states, max_properties):
 
                 page.goto(url, timeout=60000)
 
-                # simulate human wait
                 page.wait_for_timeout(8000)
 
-                # scroll to trigger JS
+                # scroll
                 page.mouse.wheel(0, 2000)
                 page.wait_for_timeout(3000)
 
-                # save debug
+                # DEBUG OUTPUT
                 html = page.content()
                 with open(f"debug/list_{state}_{page_num}.html", "w", encoding="utf-8") as f:
                     f.write(html)
 
                 page.screenshot(path=f"debug/list_{state}_{page_num}.png")
 
-                # extract links
                 links = page.eval_on_selector_all(
                     "a[href*='/property-']",
                     "els => els.map(e => e.href)"
@@ -64,7 +73,7 @@ def run(states, max_properties):
                 )
 
                 if not links:
-                    print("⚠️ Still blocked or selector wrong")
+                    print("⚠️ No links found — likely still blocked")
                     break
 
                 for link in links:
